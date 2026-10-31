@@ -58,6 +58,7 @@ from pyfory.type_util import (
     get_type_hints,
     normalize_fory_type,
     scalar_type_id,
+    to_snake_case,
     unwrap_array,
     unwrap_optional,
     unwrap_ref,
@@ -1180,27 +1181,6 @@ class StructFieldSerializerVisitor(TypeVisitor):
 _UNKNOWN_TYPE_ID = -1
 
 
-def _to_snake_case(name: str) -> str:
-    result = []
-    previous = ""
-    for index, char in enumerate(name):
-        if char == "_":
-            result.append(char)
-            previous = char
-            continue
-        if char.isupper():
-            next_is_lower = index + 1 < len(name) and name[index + 1].islower()
-            previous_lower_or_digit = previous.islower() or previous.isdigit()
-            previous_upper = previous.isupper()
-            if result and result[-1] != "_" and (previous_lower_or_digit or (previous_upper and next_is_lower)):
-                result.append("_")
-            result.append(char.lower())
-        else:
-            result.append(char)
-        previous = char
-    return "".join(result).rstrip("_")
-
-
 def _sort_fields(type_resolver, field_names, serializers, nullable_map=None, field_infos_list=None):
     (boxed_types, nullable_boxed_types, internal_types, collection_types, set_types, map_types, other_types) = group_fields(
         type_resolver, field_names, serializers, nullable_map, field_infos_list
@@ -1228,7 +1208,7 @@ def group_fields(type_resolver, field_names, serializers, nullable_map=None, fie
         if tag_id >= 0:
             sort_key = (0, tag_id, "")
         else:
-            sort_key = (1, _to_snake_case(field_name), field_name)
+            sort_key = (1, to_snake_case(field_name), field_name)
         if serializer is None:
             non_primitive_types.append((_UNKNOWN_TYPE_ID, serializer, field_name, sort_key))
         else:
@@ -1326,7 +1306,7 @@ def compute_struct_fingerprint(type_resolver, field_names, serializers, nullable
             field_id_or_name = str(tag_id)
             sort_key = (0, tag_id, "")  # 0 = tag ID fields come first
         else:
-            field_id_or_name = _to_snake_case(field_name)
+            field_id_or_name = to_snake_case(field_name)
             # Sort by snake_case field name for name-based fields.
             sort_key = (1, field_id_or_name, field_name)  # 1 = name fields come after
 

@@ -592,6 +592,50 @@ def load_class(classname: str, policy=None):
         raise Exception(f"Can't import class {cls_name} from module {mod_name}") from ex
 
 
+def to_snake_case(name: str) -> str:
+    """Convert a camelCase or PascalCase name to snake_case.
+
+    This is the canonical form of a field name: the xlang specification uses
+    the snake_case field name as the field identity for field ordering, for the
+    struct fingerprint and for matching a peer field to a local field.
+    """
+    result = []
+    previous = ""
+    for index, char in enumerate(name):
+        if char == "_":
+            result.append(char)
+            previous = char
+            continue
+        if char.isupper():
+            next_is_lower = index + 1 < len(name) and name[index + 1].islower()
+            previous_lower_or_digit = previous.islower() or previous.isdigit()
+            previous_upper = previous.isupper()
+            if result and result[-1] != "_" and (previous_lower_or_digit or (previous_upper and next_is_lower)):
+                result.append("_")
+            result.append(char.lower())
+        else:
+            result.append(char)
+        previous = char
+    return "".join(result).rstrip("_")
+
+
+def to_camel_case(name: str) -> str:
+    """Convert a snake_case name to camelCase.
+
+    This reverses Java's lowerCamelToLowerUnderscore conversion:
+    - new_object -> newObject
+    - old_object -> oldObject
+    - my_field_name -> myFieldName
+
+    If there are no underscores, the string is returned unchanged.
+    """
+    if "_" not in name:
+        return name
+    parts = name.split("_")
+    # First part stays lowercase, rest are capitalized
+    return parts[0] + "".join(part.capitalize() for part in parts[1:])
+
+
 # This method is derived from https://github.com/ericvsmith/dataclasses/blob/5f6568c3468f872e8f447dc20666628387786397/dataclass_tools.py.
 # Copyright 2017-2022 Eric V. Smith, all rights reserved.
 # Licensed under the Apache License, Version 2.0.

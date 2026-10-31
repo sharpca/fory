@@ -224,6 +224,30 @@ class SharedDagLocalPayload:
     payload: List[List[List[List[pyfory.Int64]]]] = pyfory.field(ref=True)
 
 
+@dataclass
+class CamelCaseFieldPayload:
+    createdAt: pyfory.Int32 = 0
+    fooURL: str = ""
+
+
+@dataclass
+class SnakeCaseFieldPayload:
+    created_at: pyfory.Int32 = 0
+    foo_url: str = ""
+
+
+@dataclass
+class PascalCaseFieldPayload:
+    CreatedAt: pyfory.Int32 = 0
+    FooURL: str = ""
+
+
+@dataclass
+class DuplicateIdentityPayload:
+    created_at: pyfory.Int32 = 0
+    createdAt: pyfory.Int32 = 0
+
+
 def test_collection_field_type():
     """Test collection field type creation and serialization."""
     element_type = FieldType(TypeId.INT32, True, True, False)
@@ -1461,6 +1485,79 @@ def test_compatible_shared_dag_identity(monkeypatch):
     assert node == [7]
     assert validation_calls == 8
     assert coercion_calls == 8
+
+
+def test_compatible_field_name_convention_matching():
+    # A peer may declare the same field with a different naming convention:
+    # camelCase/PascalCase peers write the declared name, while snake_case peers
+    # write the converted name. Compatible reads must match the peer field to the
+    # local field in either direction instead of silently dropping the value.
+    writer = Fory(xlang=True, compatible=True)
+    writer.register(CamelCaseFieldPayload, name="example.CamelFieldNamePayload")
+
+    reader = Fory(xlang=True, compatible=True)
+    reader.register(SnakeCaseFieldPayload, name="example.CamelFieldNamePayload")
+
+    decoded = reader.deserialize(writer.serialize(CamelCaseFieldPayload(createdAt=7, fooURL="camel")))
+    assert isinstance(decoded, SnakeCaseFieldPayload)
+    assert decoded.created_at == 7
+    assert decoded.foo_url == "camel"
+
+
+def test_compatible_pascal_case_field_name_matching():
+    writer = Fory(xlang=True, compatible=True)
+    writer.register(PascalCaseFieldPayload, name="example.PascalFieldNamePayload")
+
+    reader = Fory(xlang=True, compatible=True)
+    reader.register(SnakeCaseFieldPayload, name="example.PascalFieldNamePayload")
+
+    decoded = reader.deserialize(writer.serialize(PascalCaseFieldPayload(CreatedAt=9, FooURL="pascal")))
+    assert isinstance(decoded, SnakeCaseFieldPayload)
+    assert decoded.created_at == 9
+    assert decoded.foo_url == "pascal"
+
+
+@pytest.mark.parametrize(
+    "peer_fields,local_fields",
+    [
+        ([("created_at", int), ("foo_url", str)], [("created_at", int), ("foo_url", str)]),
+        ([("created_at", int), ("foo_url", str)], [("createdAt", int), ("fooUrl", str)]),
+        ([("created_at", int), ("foo_url", str)], [("CreatedAt", int), ("FooUrl", str)]),
+        ([("createdAt", int), ("fooUrl", str)], [("created_at", int), ("foo_url", str)]),
+        ([("createdAt", int), ("fooUrl", str)], [("createdAt", int), ("fooUrl", str)]),
+        ([("createdAt", int), ("fooUrl", str)], [("CreatedAt", int), ("FooUrl", str)]),
+        ([("CreatedAt", int), ("FooUrl", str)], [("created_at", int), ("foo_url", str)]),
+        ([("CreatedAt", int), ("FooUrl", str)], [("createdAt", int), ("fooUrl", str)]),
+        ([("CreatedAt", int), ("FooUrl", str)], [("CreatedAt", int), ("FooUrl", str)]),
+    ],
+)
+def test_compatible_field_name_identity_matrix(peer_fields, local_fields):
+    # The field identity of a name is its snake_case form, so a peer field must be
+    # matched to the local field whatever naming convention each side uses.
+    peer = make_dataclass("PeerFields", peer_fields)
+    local = make_dataclass("LocalFields", local_fields)
+
+    writer = Fory(xlang=True, compatible=True)
+    writer.register(peer, name="example.IdentityMatrixPayload")
+    reader = Fory(xlang=True, compatible=True)
+    reader.register(local, name="example.IdentityMatrixPayload")
+
+    decoded = reader.deserialize(writer.serialize(peer(7, "value")))
+    assert list(decoded.__dict__.values()) == [7, "value"]
+
+
+def test_compatible_duplicate_field_identity_writes_once():
+    # Two peer fields share one snake_case identity. Only one of them may be
+    # written into the local field, so the local field keeps a single value.
+    writer = Fory(xlang=True, compatible=True)
+    writer.register(DuplicateIdentityPayload, name="example.DuplicateIdentityPayload")
+
+    reader = Fory(xlang=True, compatible=True)
+    reader.register(SnakeCaseFieldPayload, name="example.DuplicateIdentityPayload")
+
+    decoded = reader.deserialize(writer.serialize(DuplicateIdentityPayload(created_at=1, createdAt=2)))
+    assert isinstance(decoded, SnakeCaseFieldPayload)
+    assert decoded.created_at in (1, 2)
 
 
 if __name__ == "__main__":

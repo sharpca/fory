@@ -28,6 +28,7 @@ from pyfory.type_util import get_homogeneous_tuple_elem_type, infer_field
 from pyfory.meta.metastring import Encoding
 from pyfory.type_util import infer_field_types
 from pyfory.type_util import _SEQUENCE_TYPES, _SET_TYPES, _MAPPING_TYPES
+from pyfory.type_util import to_camel_case, to_snake_case
 from pyfory.lib.mmh3 import hash_buffer
 from pyfory.field import MAX_FIELD_ID
 
@@ -210,9 +211,11 @@ class TypeDef:
         This method looks up the registered class's field metadata to find the actual field names
         that correspond to each tag_id.
 
-        For field name encoding (non-TAG_ID), the wire field name may be in snake_case
-        (Java's xlang convention) while the Python class may use either snake_case or camelCase.
-        This method tries to match the wire name against the Python class fields.
+        For field name encoding (non-TAG_ID), the peer may write the declared field name
+        (camelCase/PascalCase) or its snake_case form, while the Python class may use any of
+        those conventions. The field identity of a name is its snake_case form, so the wire
+        name is matched against the class fields by that identity, and additionally by the
+        camelCase form that reverses Java's lowerCamelToLowerUnderscore conversion.
 
         Returns:
             List of resolved field names (same order as self.fields)
@@ -223,33 +226,49 @@ class TypeDef:
         # Build tag_id -> actual field name mapping from the class
         tag_id_to_field_name = {}
         class_field_names = set()
+        # Map every class field by its snake_case identity, in declaration order, so a
+        # peer field name written in any naming convention can be matched.
+        identity_to_field_name = {}
         if dataclasses.is_dataclass(self.cls):
             for dc_field in dataclasses.fields(self.cls):
                 class_field_names.add(dc_field.name)
+                identity_to_field_name.setdefault(to_snake_case(dc_field.name), dc_field.name)
                 meta = extract_field_meta(dc_field)
                 if meta is not None and meta.id >= 0:
                     tag_id_to_field_name[meta.id] = dc_field.name
 
         # Resolve field names
         resolved_names = []
+        matched_field_names = set()
         for field_info in self.fields:
+            resolved_name = None
             if field_info.tag_id >= 0 and field_info.tag_id in tag_id_to_field_name:
                 # TAG_ID encoding: use the actual field name from the class
-                resolved_names.append(tag_id_to_field_name[field_info.tag_id])
+                resolved_name = tag_id_to_field_name[field_info.tag_id]
             else:
                 # Field name encoding: try to match with class fields
                 wire_name = field_info.name
                 if wire_name in class_field_names:
                     # Wire name matches class field directly (e.g., snake_case or camelCase)
-                    resolved_names.append(wire_name)
+                    resolved_name = wire_name
                 else:
                     # Try converting snake_case to camelCase
-                    camel_name = _snake_to_camel(wire_name)
+                    camel_name = to_camel_case(wire_name)
                     if camel_name in class_field_names:
-                        resolved_names.append(camel_name)
+                        resolved_name = camel_name
                     else:
-                        # Fallback: use the wire name as-is
-                        resolved_names.append(wire_name)
+                        # Try matching the snake_case identity of the wire name. Skip a
+                        # class field that an earlier wire field already matched, so a
+                        # peer schema with two fields of the same identity cannot write
+                        # twice into the same class field.
+                        identity_name = identity_to_field_name.get(to_snake_case(wire_name))
+                        if identity_name is not None and identity_name not in matched_field_names:
+                            resolved_name = identity_name
+            if resolved_name is None:
+                # Fallback: use the wire name as-is
+                resolved_name = field_info.name
+            matched_field_names.add(resolved_name)
+            resolved_names.append(resolved_name)
         return resolved_names
 
     def create_serializer(self, resolver):
@@ -337,23 +356,6 @@ class TypeDef:
             f"type_id={self.type_id}, user_type_id={self.user_type_id}, "
             f"fields={self.fields}, is_compressed={self.is_compressed})"
         )
-
-
-def _snake_to_camel(s: str) -> str:
-    """Convert snake_case to camelCase.
-
-    This reverses Java's lowerCamelToLowerUnderscore conversion:
-    - new_object -> newObject
-    - old_object -> oldObject
-    - my_field_name -> myFieldName
-
-    If there are no underscores, the string is returned unchanged.
-    """
-    if "_" not in s:
-        return s
-    parts = s.split("_")
-    # First part stays lowercase, rest are capitalized
-    return parts[0] + "".join(part.capitalize() for part in parts[1:])
 
 
 class FieldInfo:
