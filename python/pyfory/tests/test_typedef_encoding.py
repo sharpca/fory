@@ -248,6 +248,12 @@ class DuplicateIdentityPayload:
     createdAt: pyfory.Int32 = 0
 
 
+@dataclass
+class ReversedDuplicateIdentityPayload:
+    createdAt: pyfory.Int32 = 0
+    created_at: pyfory.Int32 = 0
+
+
 def test_collection_field_type():
     """Test collection field type creation and serialization."""
     element_type = FieldType(TypeId.INT32, True, True, False)
@@ -1543,21 +1549,27 @@ def test_compatible_field_name_identity_matrix(peer_fields, local_fields):
     reader.register(local, name="example.IdentityMatrixPayload")
 
     decoded = reader.deserialize(writer.serialize(peer(7, "value")))
-    assert list(decoded.__dict__.values()) == [7, "value"]
+    assert [getattr(decoded, name) for name, _ in local_fields] == [7, "value"]
 
 
-def test_compatible_duplicate_field_identity_writes_once():
-    # Two peer fields share one snake_case identity. Only one of them may be
-    # written into the local field, so the local field keeps a single value.
+@pytest.mark.parametrize(
+    "peer_cls",
+    [DuplicateIdentityPayload, ReversedDuplicateIdentityPayload],
+)
+def test_compatible_duplicate_field_identity_prefers_exact_match(peer_cls):
+    # Two peer fields share one snake_case identity, which is an invalid peer schema.
+    # The peer field whose name matches the local field exactly keeps the local field,
+    # the other peer field is read and discarded. The peer field order follows the
+    # field identity, so the outcome does not depend on the declaration order.
     writer = Fory(xlang=True, compatible=True)
-    writer.register(DuplicateIdentityPayload, name="example.DuplicateIdentityPayload")
+    writer.register(peer_cls, name="example.DuplicateIdentityPayload")
 
     reader = Fory(xlang=True, compatible=True)
     reader.register(SnakeCaseFieldPayload, name="example.DuplicateIdentityPayload")
 
-    decoded = reader.deserialize(writer.serialize(DuplicateIdentityPayload(created_at=1, createdAt=2)))
+    decoded = reader.deserialize(writer.serialize(peer_cls(created_at=1, createdAt=2)))
     assert isinstance(decoded, SnakeCaseFieldPayload)
-    assert decoded.created_at in (1, 2)
+    assert decoded.created_at == 1
 
 
 if __name__ == "__main__":

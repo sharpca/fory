@@ -622,10 +622,16 @@ def to_snake_case(name: str) -> str:
 def to_camel_case(name: str) -> str:
     """Convert a snake_case name to camelCase.
 
-    This reverses Java's lowerCamelToLowerUnderscore conversion:
+    This recovers the camelCase form of a name that a peer runtime wrote in
+    snake_case, for example:
     - new_object -> newObject
     - old_object -> oldObject
     - my_field_name -> myFieldName
+
+    It also maps back the form of a runtime that splits before every uppercase
+    character, so the ``_u_r_l_value`` that Java's lowerCamelToLowerUnderscore
+    writes for ``URLValue`` maps back to ``URLValue``. The snake_case identity of
+    such a name still differs between runtimes, see apache/fory#4187.
 
     If there are no underscores, the string is returned unchanged.
     """

@@ -214,8 +214,9 @@ class TypeDef:
         For field name encoding (non-TAG_ID), the peer may write the declared field name
         (camelCase/PascalCase) or its snake_case form, while the Python class may use any of
         those conventions. The field identity of a name is its snake_case form, so the wire
-        name is matched against the class fields by that identity, and additionally by the
-        camelCase form that reverses Java's lowerCamelToLowerUnderscore conversion.
+        name is matched against the class fields by that identity. A name that a peer runtime
+        wrote by splitting before every uppercase character is matched by the camelCase form
+        that recovers the declared name.
 
         Returns:
             List of resolved field names (same order as self.fields)
@@ -237,38 +238,42 @@ class TypeDef:
                 if meta is not None and meta.id >= 0:
                     tag_id_to_field_name[meta.id] = dc_field.name
 
-        # Resolve field names
-        resolved_names = []
-        matched_field_names = set()
-        for field_info in self.fields:
-            resolved_name = None
+        # Resolve field names. A tag ID or an exact name match identifies a class field
+        # unambiguously, so it claims the class field first. A converted match is a
+        # heuristic, so it only claims a class field that no unambiguous match claimed.
+        resolved_names = [None] * len(self.fields)
+        claimed_field_names = set()
+        for index, field_info in enumerate(self.fields):
             if field_info.tag_id >= 0 and field_info.tag_id in tag_id_to_field_name:
-                # TAG_ID encoding: use the actual field name from the class
-                resolved_name = tag_id_to_field_name[field_info.tag_id]
-            else:
-                # Field name encoding: try to match with class fields
-                wire_name = field_info.name
-                if wire_name in class_field_names:
-                    # Wire name matches class field directly (e.g., snake_case or camelCase)
-                    resolved_name = wire_name
-                else:
-                    # Try converting snake_case to camelCase
-                    camel_name = to_camel_case(wire_name)
-                    if camel_name in class_field_names:
-                        resolved_name = camel_name
-                    else:
-                        # Try matching the snake_case identity of the wire name. Skip a
-                        # class field that an earlier wire field already matched, so a
-                        # peer schema with two fields of the same identity cannot write
-                        # twice into the same class field.
-                        identity_name = identity_to_field_name.get(to_snake_case(wire_name))
-                        if identity_name is not None and identity_name not in matched_field_names:
-                            resolved_name = identity_name
-            if resolved_name is None:
-                # Fallback: use the wire name as-is
-                resolved_name = field_info.name
-            matched_field_names.add(resolved_name)
-            resolved_names.append(resolved_name)
+                resolved_names[index] = tag_id_to_field_name[field_info.tag_id]
+                claimed_field_names.add(resolved_names[index])
+            elif field_info.name in class_field_names:
+                resolved_names[index] = field_info.name
+                claimed_field_names.add(field_info.name)
+
+        for index, field_info in enumerate(self.fields):
+            if resolved_names[index] is not None:
+                continue
+            wire_name = field_info.name
+            # A peer runtime that splits before every uppercase character, such as
+            # Java's lowerCamelToLowerUnderscore, writes URLValue as _u_r_l_value.
+            # The camelCase form recovers that declared name, which the identity
+            # lookup cannot, because the two runtimes disagree on the snake_case
+            # identity of such a name.
+            camel_name = to_camel_case(wire_name)
+            if camel_name in class_field_names and camel_name not in claimed_field_names:
+                resolved_names[index] = camel_name
+                claimed_field_names.add(camel_name)
+                continue
+            identity_name = identity_to_field_name.get(to_snake_case(wire_name))
+            if identity_name is not None and identity_name not in claimed_field_names:
+                resolved_names[index] = identity_name
+                claimed_field_names.add(identity_name)
+                continue
+            # Fallback: use the wire name as-is. The wire name is not a class field
+            # here, because an exact match would have claimed it in the first pass,
+            # so the value of this peer field is read and discarded.
+            resolved_names[index] = wire_name
         return resolved_names
 
     def create_serializer(self, resolver):
